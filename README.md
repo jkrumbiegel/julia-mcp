@@ -14,13 +14,18 @@ Requires Julia 1.13 (via juliaup) and a C compiler.
 ./build.sh                    # uses `julia +1.13`; override with JULIA=/path/to/julia
 ```
 
-This writes a relocatable bundle to `dist/`. The executable is `dist/bin/julia-mcp` and needs `dist/lib` next to it.
+This writes a relocatable bundle to `dist/`. The executable is `dist/bin/julia-mcp` and needs `dist/lib` next to it. A rebuild replaces `dist/` only once the new bundle is complete, so running servers are not affected.
 
 ## Register with Claude Code
 
+Link the executable into a directory on your `PATH` and register it:
+
 ```sh
-claude mcp add --scope user julia -- /path/to/julia-mcp/dist/bin/julia-mcp
+ln -sf "$PWD/dist/bin/julia-mcp" ~/.local/bin/julia-mcp
+claude mcp add --scope user julia -- ~/.local/bin/julia-mcp
 ```
+
+To update, pull and run `./build.sh` again; new Claude sessions pick up the new binary.
 
 Julia flags passed after the executable replace the default `--threads=auto`.
 

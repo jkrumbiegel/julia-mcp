@@ -1,2 +1,4 @@
 Manifest.toml
 /dist/
+/dist.new/
+/dist.old/
