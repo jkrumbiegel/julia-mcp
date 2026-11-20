@@ -1,0 +1,10 @@
+[deps]
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+JuliaMCP = "8d2f6c1e-3b7a-4f5e-9c2d-1a6b4e8f0c37"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[sources]
+JuliaMCP = {path = ".."}
+
+[compat]
+JSON = "1.13.4"
