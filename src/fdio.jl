@@ -2,70 +2,64 @@ struct SessionError <: Exception
     msg::String
 end
 
+close_fd(fd::RawFD) = ccall(:close, Cint, (Cint,), Base.cconvert(Cint, fd))
+
 mutable struct FDReader
     fd::RawFD
-    watcher::Union{Nothing, FDWatcher}
+    watcher::FDWatcher
+    chunk::Vector{UInt8}
     buffer::Vector{UInt8}
     closed::Bool
 end
 
-FDReader(fd::RawFD; watch::Bool = true) =
-    FDReader(fd, watch ? FDWatcher(fd, true, false) : nothing, UInt8[], false)
+FDReader(fd::RawFD) = FDReader(fd, FDWatcher(fd, true, false), Vector{UInt8}(undef, 65536), UInt8[], false)
 
 function Base.close(r::FDReader)
     r.closed && return
     r.closed = true
-    r.watcher === nothing || close(r.watcher)
-    ccall(:close, Cint, (Cint,), Base.cconvert(Cint, r.fd))
+    close(r.watcher)
+    close_fd(r.fd)
     return
 end
 
 function wait_readable(r::FDReader)
-    watcher = r.watcher
-    watcher === nothing && return true
     try
-        wait(watcher)
+        wait(r.watcher)
         return true
     catch
         return false
     end
 end
 
-const RETRY_ERRNOS = (Libc.EAGAIN, Libc.EINTR)
-
 function read_available!(r::FDReader)
-    chunk = Vector{UInt8}(undef, 65536)
-    while true
-        r.closed && return false
-        wait_readable(r) || return false
-        n = ccall(:read, Cssize_t, (Cint, Ptr{UInt8}, Csize_t), Base.cconvert(Cint, r.fd), chunk, length(chunk))
+    while !r.closed && wait_readable(r)
+        n = ccall(:read, Cssize_t, (Cint, Ptr{UInt8}, Csize_t), Base.cconvert(Cint, r.fd), r.chunk, length(r.chunk))
         if n > 0
-            append!(r.buffer, view(chunk, 1:n))
+            append!(r.buffer, view(r.chunk, 1:n))
             return true
-        elseif n == 0 || !(Libc.errno() in RETRY_ERRNOS)
-            return false
         end
+        (n == 0 || !(Libc.errno() in (Libc.EAGAIN, Libc.EINTR))) && return false
     end
+    return false
+end
+
+chomp_cr(line::String) = endswith(line, '\r') ? String(chop(line)) : line
+
+function take_line!(buffer::Vector{UInt8}, len::Int, skip::Int)
+    line = String(buffer[1:len])
+    deleteat!(buffer, 1:len+skip)
+    return chomp_cr(line)
 end
 
 function readline_fd(r::FDReader)::Union{Nothing, String}
     while true
         i = findfirst(==(UInt8('\n')), r.buffer)
-        if i !== nothing
-            line = String(r.buffer[1:i-1])
-            deleteat!(r.buffer, 1:i)
-            return chomp_cr(line)
-        end
+        i === nothing || return take_line!(r.buffer, i - 1, 1)
         if !read_available!(r)
-            isempty(r.buffer) && return nothing
-            line = String(copy(r.buffer))
-            empty!(r.buffer)
-            return chomp_cr(line)
+            return isempty(r.buffer) ? nothing : take_line!(r.buffer, length(r.buffer), 0)
         end
     end
 end
-
-chomp_cr(line::String) = endswith(line, '\r') ? String(chop(line)) : line
 
 function write_fd(fd::RawFD, data::Vector{UInt8})
     offset = 0
@@ -83,20 +77,20 @@ end
 
 write_fd(fd::RawFD, s::String) = write_fd(fd, Vector{UInt8}(codeunits(s)))
 
-close_fd(fd::RawFD) = ccall(:close, Cint, (Cint,), Base.cconvert(Cint, fd))
-
 mutable struct ChildProcess
     process::Base.Process
     stdin::RawFD
     stdout::FDReader
-    stdin_closed::Bool
+    reaper::Base.Process
+    reaper_pipe::RawFD
+    closed::Bool
 end
 
 function spawn_merged(argv::Vector{String}, dir::String)
     child_stdin, parent_stdin = Base.link_pipe(false, false)
     parent_stdout, child_stdout = Base.link_pipe(true, false)
     process = try
-        spawn_raw(argv, dir, child_stdin, child_stdout)
+        spawn_raw(argv, dir, [fd_handle(child_stdin), fd_handle(child_stdout), fd_handle(child_stdout)])
     catch
         close_fd(parent_stdin)
         close_fd(parent_stdout)
@@ -105,24 +99,27 @@ function spawn_merged(argv::Vector{String}, dir::String)
         close_fd(child_stdin)
         close_fd(child_stdout)
     end
-    spawn_orphan_reaper(getpid(process))
-    return ChildProcess(process, parent_stdin, FDReader(parent_stdout), false)
+    reaper, reaper_pipe = spawn_orphan_reaper(getpid(process))
+    return ChildProcess(process, parent_stdin, FDReader(parent_stdout), reaper, reaper_pipe, false)
 end
 
+# The trimmed runtime skips atexit hooks on signals, so a watcher outside the server kills the child
+# once the server is gone for any reason; it sees EOF on a pipe only the server holds open.
 function spawn_orphan_reaper(child_pid::Integer)
-    script = "while kill -0 $(getpid()); do kill -0 $child_pid || exit 0; sleep 1; done 2>/dev/null; kill -9 $child_pid"
-    reaper = spawn_raw(["/bin/sh", "-c", script], "/", [IGNORED_HANDLE, IGNORED_HANDLE, IGNORED_HANDLE])
-    @async wait(reaper)
-    return
+    reaper_stdin, reaper_pipe = Base.link_pipe(false, false)
+    script = "while read -r _; do :; done; kill -9 $child_pid 2>/dev/null"
+    reaper = try
+        spawn_raw(["/bin/sh", "-c", script], "/", [fd_handle(reaper_stdin), IGNORED_HANDLE, IGNORED_HANDLE])
+    finally
+        close_fd(reaper_stdin)
+    end
+    return reaper, reaper_pipe
 end
 
 fd_handle(fd::RawFD) = (Cint(0x02), UInt(Base.cconvert(Cint, fd)))
 const IGNORED_HANDLE = (Cint(0x00), UInt(0))
 
-function spawn_raw(argv::Vector{String}, dir::String, stdin_fd::RawFD, stdout_fd::RawFD)
-    return spawn_raw(argv, dir, [fd_handle(stdin_fd), fd_handle(stdout_fd), fd_handle(stdout_fd)])
-end
-
+# Trimmed-down Base._spawn_primitive, which fails --trim=safe (rawhandle on an abstract union, repr in the error path).
 function spawn_raw(argv::Vector{String}, dir::String, iohandles::Vector{Tuple{Cint, UInt}})
     cmd = Cmd(Cmd(argv); dir)
     exec = cmd.exec
@@ -155,13 +152,19 @@ end
 
 is_running(c::ChildProcess) = process_running(c.process)
 
+function kill_process(p::Base.Process)
+    process_running(p) && kill(p, Base.SIGKILL)
+    wait(p)
+    return
+end
+
 function kill_child(c::ChildProcess)
-    process_running(c.process) && kill(c.process, Base.SIGKILL)
-    wait(c.process)
+    kill_process(c.process)
     close(c.stdout)
-    if !c.stdin_closed
-        c.stdin_closed = true
-        close_fd(c.stdin)
-    end
+    c.closed && return
+    c.closed = true
+    kill_process(c.reaper)
+    close_fd(c.reaper_pipe)
+    close_fd(c.stdin)
     return
 end

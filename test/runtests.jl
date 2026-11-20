@@ -132,7 +132,7 @@ end
         @test startswith(eval_in(pkg_dir, "1", "julia_cmd" => "nonexistent-julia-binary"),
             "Error: 'nonexistent-julia-binary' not found in PATH.")
 
-        pids = [Int(getpid(s.child.process)) for s in values(m.sessions)]
+        pids = [Int(getpid(p)) for s in values(m.sessions) for p in (s.child.process, s.child.reaper)]
         @test !isempty(pids)
         log_dir = m.log_dir
         shutdown!(m)
