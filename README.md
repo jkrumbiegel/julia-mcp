@@ -32,6 +32,8 @@ julia +1.13 --project=test -e 'import Pkg; Pkg.instantiate(); include("test/runt
 
 ## Differences from the Python server
 
+- Sessions can be given a `name`, so several sessions can share one `env_path` (for example the same project under two Julia versions), and later calls can address a session by name alone.
+- Sessions idle for 72 hours are shut down.
 - Sessions are killed and temporary directories removed when the client closes stdin, including sessions that are still busy.
 - Each session gets a small `/bin/sh` watcher that SIGKILLs it once the server process is gone, so sessions do not outlive a server that was terminated by a signal.
 - Unexpected internal errors are reported without exception details, because generic `showerror` is not trim-safe.

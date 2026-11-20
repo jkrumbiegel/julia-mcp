@@ -2,6 +2,8 @@ struct SessionError <: Exception
     msg::String
 end
 
+Base.showerror(io::IO, e::SessionError) = print(io, e.msg)
+
 close_fd(fd::RawFD) = ccall(:close, Cint, (Cint,), Base.cconvert(Cint, fd))
 
 mutable struct FDReader

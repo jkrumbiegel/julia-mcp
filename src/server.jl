@@ -13,7 +13,12 @@ Args:
     code: Julia code to evaluate. Use display(...)/println(...) to see output.
     env_path: Julia project directory path. Omit for a temporary environment.
     timeout: Seconds (default: 60). Auto-disabled for Pkg operations.
-    julia_cmd: Custom Julia command, should be used rarely, only when explicitly requested. Examples: "julia +1.11", "julia --check-bounds=yes", "/path/to/julia"."""
+    julia_cmd: Custom Julia command, should be used rarely, only when explicitly requested. Examples: "julia +1.11", "julia --check-bounds=yes", "/path/to/julia".
+    name: Short label for the session, to avoid repeating env_path and julia_cmd.
+        Pass it with env_path (and julia_cmd) once to name the session, then pass
+        name alone on later calls. A named session is never restarted implicitly,
+        so naming lets several sessions share one env_path, e.g. the same project
+        under two Julia versions."""
 
 const JULIA_RESTART_DESCRIPTION = """
 Restart a Julia session, clearing all state.
@@ -26,9 +31,11 @@ Do NOT restart just because source files were edited between script or test runs
 Args:
     env_path: Environment to restart. If omitted, restarts the temporary session
         (NOT every active session) — most callers should pass the same env_path
-        they used in julia_eval."""
+        they used in julia_eval.
+    julia_cmd: Same julia_cmd that was used to start the session, if any.
+    name: Name of the session to restart, instead of env_path and julia_cmd."""
 
-const JULIA_LIST_SESSIONS_DESCRIPTION = "List all active Julia sessions and their environments."
+const JULIA_LIST_SESSIONS_DESCRIPTION = "List all active Julia sessions, their names, environments and Julia commands."
 
 const JSONObject = JSON.Object{String, Any}
 const RequestId = Union{Int64, String, Nothing}
@@ -64,8 +71,10 @@ end
 tool_list() = [
     ToolSpec("julia_eval", JULIA_EVAL_DESCRIPTION, input_schema(
         "code" => plain("string"), "env_path" => nullable("string"),
-        "timeout" => nullable("number"), "julia_cmd" => nullable("string"); required = ["code"])),
-    ToolSpec("julia_restart", JULIA_RESTART_DESCRIPTION, input_schema("env_path" => nullable("string"))),
+        "timeout" => nullable("number"), "julia_cmd" => nullable("string"), "name" => nullable("string");
+        required = ["code"])),
+    ToolSpec("julia_restart", JULIA_RESTART_DESCRIPTION, input_schema(
+        "env_path" => nullable("string"), "julia_cmd" => nullable("string"), "name" => nullable("string"))),
     ToolSpec("julia_list_sessions", JULIA_LIST_SESSIONS_DESCRIPTION, input_schema()),
 ]
 
@@ -112,39 +121,49 @@ function julia_eval(m::SessionManager, args::JSONObject)
     env_path = optional_string(args, "env_path")
     timeout = effective_timeout(code, optional_number(args, "timeout"))
     julia_cmd = optional_string(args, "julia_cmd")
+    name = optional_string(args, "name")
     try
-        session = get_or_create!(m, env_path; julia_cmd)
+        session = get_or_create!(m, env_path; julia_cmd, name)
         output = execute(session, code, timeout)
         return isempty(output) ? "(no output)" : output
     catch e
         e isa InvalidParams && rethrow()
-        drop_dead_session!(m, env_path)
+        drop_dead_sessions!(m)
         return "Error: " * error_message(e)
     end
 end
 
-python_list_repr(items::Vector{String}) = "[" * join(("'" * s * "'" for s in items), ", ") * "]"
-
 function julia_restart(m::SessionManager, args::JSONObject)
     env_path = optional_string(args, "env_path")
-    label = env_path === nothing ? "temporary" : env_path
-    restart!(m, env_path) && return "Session restarted (env_path=$label). A fresh session will start on next julia_eval call."
+    julia_cmd = optional_string(args, "julia_cmd")
+    name = optional_string(args, "name")
+    restarted = try
+        restart!(m, env_path; julia_cmd, name)
+    catch e
+        e isa SessionError || rethrow()
+        return "Error: " * e.msg
+    end
+    label = name !== nothing ? name : env_path !== nothing ? env_path : "temporary"
+    restarted && return "Session restarted ($label). A fresh session will start on next julia_eval call."
+    msg = "No active session for $label — nothing to restart."
     active = String[s.env_path for s in list_sessions(m)]
-    msg = "No active session for env_path=$label — nothing to restart."
-    isempty(active) && return msg
-    return "No active session for env_path=$label — nothing to restart. Active sessions: " * python_list_repr(active)
+    return isempty(active) ? msg : msg * " Active sessions: " * python_list_repr(active)
+end
+
+function session_line(s::SessionInfo)
+    name = s.name === nothing ? "" : "[" * s.name * "] "
+    label = s.temp ? s.env_path * " (temp)" : s.env_path
+    julia = s.julia_cmd === nothing ? "" : " julia_cmd=" * s.julia_cmd
+    log = s.log_file === nothing ? "" : " log=" * s.log_file
+    cmd = s.cmd === nothing ? "" : "\n      cmd: " * s.cmd
+    return string("  ", name, label, ": ", s.alive ? "alive" : "dead", julia, log, cmd)
 end
 
 function julia_list_sessions(m::SessionManager, ::JSONObject)
+    header = "Julia args applied to every session: " * (isempty(m.julia_args) ? "(none)" : shell_join(m.julia_args))
     sessions = list_sessions(m)
-    isempty(sessions) && return "No active Julia sessions."
-    lines = map(sessions) do s
-        label = s.temp ? s.env_path * " (temp)" : s.env_path
-        julia = s.julia_cmd === nothing ? "" : " julia_cmd=" * s.julia_cmd
-        log = s.log_file === nothing ? "" : " log=" * s.log_file
-        string("  ", label, ": ", s.alive ? "alive" : "dead", julia, log)
-    end
-    return "Active Julia sessions:\n" * join(lines, "\n")
+    isempty(sessions) && return "No active Julia sessions.\n" * header
+    return "Active Julia sessions:\n" * join(map(session_line, sessions), "\n") * "\n" * header
 end
 
 function call_tool(m::SessionManager, name::String, args::JSONObject)::String
