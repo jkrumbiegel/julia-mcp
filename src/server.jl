@@ -152,9 +152,10 @@ function session_line(s::SessionInfo)
     name = s.name === nothing ? "" : "[" * s.name * "] "
     label = s.temp ? s.env_path * " (temp)" : s.env_path
     julia = s.julia_cmd === nothing ? "" : " julia_cmd=" * s.julia_cmd
+    revise = s.revise_loaded ? "" : " (Revise not loaded)"
     log = s.log_file === nothing ? "" : " log=" * s.log_file
     cmd = s.cmd === nothing ? "" : "\n      cmd: " * s.cmd
-    return string("  ", name, label, ": ", s.alive ? "alive" : "dead", julia, log, cmd)
+    return string("  ", name, label, ": ", s.alive ? "alive" : "dead", revise, julia, log, cmd)
 end
 
 function julia_list_sessions(m::SessionManager, ::JSONObject)

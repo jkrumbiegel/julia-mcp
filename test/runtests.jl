@@ -222,6 +222,20 @@ end
         end
     end
 
+    @testset "Revise failing to load" begin
+        withenv("JULIA_LOAD_PATH" => "@:@stdlib") do
+            with_manager() do m
+                eval_code(code) = tool_text(m, "julia_eval", JSON.json(Dict("code" => code)))
+                first_result = eval_code("println(42)")
+                @test startswith(first_result, "Note: Revise failed to load, so edits to source files are not picked up " *
+                    "in this session:\nArgumentError: Package Revise not found")
+                @test endswith(first_result, "\n\n42")
+                @test eval_code("println(42)") == "42"
+                @test occursin("(temp): alive (Revise not loaded)", tool_text(m, "julia_list_sessions"))
+            end
+        end
+    end
+
     @testset "idle reaping" begin
         long_ago = time() - 365 * 24 * 3600
         with_manager() do m

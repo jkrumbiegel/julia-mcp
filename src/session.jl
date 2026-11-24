@@ -20,6 +20,8 @@ mutable struct JuliaSession
     lock::ReentrantLock
     log::Union{Nothing, IOStream}
     last_used::Float64
+    revise_loaded::Bool
+    pending_notice::Union{Nothing, String}
 end
 
 function JuliaSession(
@@ -30,7 +32,7 @@ function JuliaSession(
     name::Union{Nothing, String} = nothing,
     log::Union{Nothing, IOStream} = nothing,
 )
-    return JuliaSession(env_dir, sentinel, is_temp, is_test, julia_args, julia_cmd, name, nothing, nothing, ReentrantLock(), log, time())
+    return JuliaSession(env_dir, sentinel, is_temp, is_test, julia_args, julia_cmd, name, nothing, nothing, ReentrantLock(), log, time(), false, nothing)
 end
 
 new_sentinel() = "__JULIA_MCP_" * bytes2hex(rand(UInt8, 16)) * "__"
@@ -115,20 +117,36 @@ function start!(s::JuliaSession)
     s.cmd = cmd
     s.child = spawn_merged(cmd, s.env_dir)
     execute_raw(s, "", STARTUP_TIMEOUT)
-    execute_raw(s, "try; using Revise; catch; end", STARTUP_TIMEOUT)
+    load_revise!(s)
 
     code = init_code(s)
     if code !== nothing
-        wrapped = "try; $code; catch __e; print(\"$INIT_ERROR_MARKER\"); showerror(stdout, __e); end"
-        out = execute_raw(s, wrapped, nothing)
-        if occursin(INIT_ERROR_MARKER, out)
+        failure = init_failure(execute_raw(s, guarded(code), nothing))
+        if failure !== nothing
             kill!(s)
             throw(SessionError(string(
-                "Failed to initialize environment '", s.env_dir, "' (init code '", code, "'):\n",
-                strip(replace(out, INIT_ERROR_MARKER => "")))))
+                "Failed to initialize environment '", s.env_dir, "' (init code '", code, "'):\n", failure)))
         end
     end
     return s
+end
+
+guarded(code::String) = "try; $code; catch __e; print(\"$INIT_ERROR_MARKER\"); showerror(stdout, __e); end"
+
+init_failure(out::String) = occursin(INIT_ERROR_MARKER, out) ? String(strip(replace(out, INIT_ERROR_MARKER => ""))) : nothing
+
+function load_revise!(s::JuliaSession)
+    failure = init_failure(execute_raw(s, guarded("using Revise"), STARTUP_TIMEOUT))
+    s.revise_loaded = failure === nothing
+    s.revise_loaded || (s.pending_notice = string(
+        "Note: Revise failed to load, so edits to source files are not picked up in this session:\n", failure, "\n\n"))
+    return
+end
+
+function take_notice!(s::JuliaSession)
+    notice = something(s.pending_notice, "")
+    s.pending_notice = nothing
+    return notice
 end
 
 function wrap_user_code(code::String)
@@ -159,7 +177,8 @@ function execute(s::JuliaSession, code::String, timeout::Union{Nothing, Float64}
             s.last_used = time()
         end
         isempty(output) || log_entry(s, output * "\n\n")
-        output
+        notice = take_notice!(s)
+        isempty(output) ? notice : notice * output
     end
 end
 
@@ -480,6 +499,7 @@ struct SessionInfo
     temp::Bool
     name::Union{Nothing, String}
     julia_cmd::Union{Nothing, String}
+    revise_loaded::Bool
     cmd::Union{Nothing, String}
     log_file::Union{Nothing, String}
 end
@@ -488,7 +508,7 @@ sort_key(entry::Pair{SessionKey, JuliaSession}) = (entry.first.env, something(en
 
 function list_sessions(m::SessionManager)
     return [
-        SessionInfo(s.env_dir, is_alive(s), s.is_temp, s.name, s.julia_cmd,
+        SessionInfo(s.env_dir, is_alive(s), s.is_temp, s.name, s.julia_cmd, s.revise_loaded,
             s.cmd === nothing ? nothing : shell_join(something(s.cmd)),
             haskey(m.log_files, key) ? m.log_files[key].path : nothing)
         for (key, s) in sort!(collect(m.sessions); by = sort_key)
