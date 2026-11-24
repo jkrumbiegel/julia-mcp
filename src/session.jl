@@ -454,7 +454,7 @@ function replace_or_create!(m::SessionManager, env_path::Union{Nothing, String},
     return session
 end
 
-function restart!(m::SessionManager, env_path::Union{Nothing, String} = nothing;
+function stop!(m::SessionManager, env_path::Union{Nothing, String} = nothing;
         julia_cmd::Union{Nothing, String} = nothing, name::Union{Nothing, String} = nothing)
     key = resolve_key(m, env_path, julia_cmd, name)
     session = get(m.sessions, key, nothing)

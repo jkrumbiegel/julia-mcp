@@ -20,20 +20,18 @@ Args:
         so naming lets several sessions share one env_path, e.g. the same project
         under two Julia versions."""
 
-const JULIA_RESTART_DESCRIPTION = """
-Restart a Julia session, clearing all state.
+const JULIA_STOP_DESCRIPTION = """
+Stop a Julia session, freeing its memory and losing all its state. The next julia_eval call for the same
+environment starts a fresh session.
 
-IMPORTANT: Restarting is slow and loses all session state. Very rarely needed.
-Revise.jl is loaded automatically in every session, so code changes to loaded packages are picked up without restarting.
-Only restart as a last resort when the session is truly broken, or code changes that Revise cannot fix.
-Do NOT restart just because source files were edited between script or test runs — Revise picks up those changes automatically.
+Use it to release resources of a session that is no longer needed, or to get a clean state. It is not needed
+after editing source files: Revise picks up those changes (see julia_eval).
 
 Args:
-    env_path: Environment to restart. If omitted, restarts the temporary session
-        (NOT every active session) — most callers should pass the same env_path
-        they used in julia_eval.
+    env_path: Environment of the session. If omitted, stops the temporary session (not every session).
     julia_cmd: Same julia_cmd that was used to start the session, if any.
-    name: Name of the session to restart, instead of env_path and julia_cmd."""
+    name: Name of the session, instead of env_path and julia_cmd. The name is released, so a later
+        julia_eval needs env_path again to recreate it."""
 
 const JULIA_LIST_SESSIONS_DESCRIPTION = "List all active Julia sessions, their names, environments and Julia commands."
 
@@ -73,7 +71,7 @@ tool_list() = [
         "code" => plain("string"), "env_path" => nullable("string"),
         "timeout" => nullable("number"), "julia_cmd" => nullable("string"), "name" => nullable("string");
         required = ["code"])),
-    ToolSpec("julia_restart", JULIA_RESTART_DESCRIPTION, input_schema(
+    ToolSpec("julia_stop", JULIA_STOP_DESCRIPTION, input_schema(
         "env_path" => nullable("string"), "julia_cmd" => nullable("string"), "name" => nullable("string"))),
     ToolSpec("julia_list_sessions", JULIA_LIST_SESSIONS_DESCRIPTION, input_schema()),
 ]
@@ -133,19 +131,19 @@ function julia_eval(m::SessionManager, args::JSONObject)
     end
 end
 
-function julia_restart(m::SessionManager, args::JSONObject)
+function julia_stop(m::SessionManager, args::JSONObject)
     env_path = optional_string(args, "env_path")
     julia_cmd = optional_string(args, "julia_cmd")
     name = optional_string(args, "name")
-    restarted = try
-        restart!(m, env_path; julia_cmd, name)
+    stopped = try
+        stop!(m, env_path; julia_cmd, name)
     catch e
         e isa SessionError || rethrow()
         return "Error: " * e.msg
     end
     label = name !== nothing ? name : env_path !== nothing ? env_path : "temporary"
-    restarted && return "Session restarted ($label). A fresh session will start on next julia_eval call."
-    msg = "No active session for $label — nothing to restart."
+    stopped && return "Session stopped ($label)."
+    msg = "No active session for $label, nothing to stop."
     active = String[s.env_path for s in list_sessions(m)]
     return isempty(active) ? msg : msg * " Active sessions: " * python_list_repr(active)
 end
@@ -168,7 +166,7 @@ end
 
 function call_tool(m::SessionManager, name::String, args::JSONObject)::String
     name == "julia_eval" && return julia_eval(m, args)
-    name == "julia_restart" && return julia_restart(m, args)
+    name == "julia_stop" && return julia_stop(m, args)
     name == "julia_list_sessions" && return julia_list_sessions(m, args)
     throw(InvalidParams("Unknown tool: " * name))
 end

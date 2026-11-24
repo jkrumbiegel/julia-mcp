@@ -3,7 +3,7 @@ using JuliaMCP
 using JSON
 using JuliaMCP: handle_message, SessionManager, shutdown!, shell_split, list_sessions, effective_timeout,
     JuliaSession, session_key, normalize_julia_cmd, plan, resolve_key, get_or_create!, execute, is_alive, kill!,
-    restart!, reap_idle!
+    stop!, reap_idle!
 
 function rpc(m, method, params = "{}"; id = 1)
     reply = handle_message(m, """{"jsonrpc":"2.0","id":$id,"method":"$method","params":$params}""")
@@ -106,7 +106,7 @@ end
             @test rpc(m, "initialize", """{"protocolVersion":"1999-01-01"}""")["result"]["protocolVersion"] == "2025-06-18"
 
             tools = rpc(m, "tools/list")["result"]["tools"]
-            @test [t["name"] for t in tools] == ["julia_eval", "julia_restart", "julia_list_sessions"]
+            @test [t["name"] for t in tools] == ["julia_eval", "julia_stop", "julia_list_sessions"]
             nullable_string = Dict("anyOf" => [Dict("type" => "string"), Dict("type" => "null")], "default" => nothing)
             @test tools[2]["inputSchema"] == Dict("type" => "object", "properties" => Dict(
                 "env_path" => nullable_string, "julia_cmd" => nullable_string, "name" => nullable_string))
@@ -123,7 +123,7 @@ end
             @test call_tool(m, "julia_eval", "{}") == ("missing required argument 'code'", true)
             @test call_tool(m, "julia_eval", """{"code":"1","timeout":"x"}""") == ("argument 'timeout' must be a number or null", true)
             @test tool_text(m, "julia_list_sessions") == "No active Julia sessions.\nJulia args applied to every session: --threads=auto"
-            @test tool_text(m, "julia_restart") == "No active session for temporary — nothing to restart."
+            @test tool_text(m, "julia_stop") == "No active session for temporary, nothing to stop."
         end
     end
 
@@ -157,8 +157,7 @@ end
             @test isempty(list_sessions(m))
             @test eval_code("println(@isdefined(x))") == "false"
 
-            @test tool_text(m, "julia_restart") ==
-                "Session restarted (temporary). A fresh session will start on next julia_eval call."
+            @test tool_text(m, "julia_stop") == "Session stopped (temporary)."
             @test isempty(list_sessions(m))
         end
     end
@@ -172,8 +171,8 @@ end
         @test eval_in(test_dir, "println(pwd())") == test_dir
         @test [s.env_path for s in list_sessions(m)] == sort([pkg_dir, test_dir])
 
-        @test tool_text(m, "julia_restart", JSON.json(Dict("env_path" => "/nonexistent"))) ==
-            "No active session for /nonexistent — nothing to restart. Active sessions: " *
+        @test tool_text(m, "julia_stop", JSON.json(Dict("env_path" => "/nonexistent"))) ==
+            "No active session for /nonexistent, nothing to stop. Active sessions: " *
             "['$(min(pkg_dir, test_dir))', '$(max(pkg_dir, test_dir))']"
 
         @test eval_in(pkg_dir, "a = 1; println(Threads.nthreads() > 1)") == "true"
@@ -211,10 +210,9 @@ end
             @test eval_tool("code" => "1", "env_path" => dir, "name" => "other") ==
                 "Error: $dir already belongs to session 'pkg'. Use name='pkg' instead of 'other'."
 
-            @test tool_text(m, "julia_restart", JSON.json(Dict("name" => "t2"))) ==
-                "Session restarted (t2). A fresh session will start on next julia_eval call."
+            @test tool_text(m, "julia_stop", JSON.json(Dict("name" => "t2"))) == "Session stopped (t2)."
             @test !is_alive(two)
-            @test_throws "Unknown session name 't2'." restart!(m; name = "t2")
+            @test_throws "Unknown session name 't2'." stop!(m; name = "t2")
 
             kill!(unnamed)
             recreated = get_or_create!(m; name = "pkg")
@@ -252,7 +250,7 @@ end
             fresh.last_used = long_ago
             reap_idle!(m)
             @test !is_alive(fresh)
-            @test_throws "Unknown session name 'pkg'." restart!(m; name = "pkg")
+            @test_throws "Unknown session name 'pkg'." stop!(m; name = "pkg")
         finally
             shutdown!(m)
             rm(dir; recursive = true)

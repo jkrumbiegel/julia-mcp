@@ -1,8 +1,8 @@
 # julia-mcp
 
-An MCP server for persistent Julia sessions, written in Julia and compiled with `juliac --trim=safe` into a standalone executable. It provides three tools over stdio: `julia_eval`, `julia_restart` and `julia_list_sessions`. Each environment gets its own `julia` child process, so state and compiled code are kept between calls.
+An MCP server for persistent Julia sessions, written in Julia and compiled with `juliac --trim=safe` into a standalone executable. It provides three tools over stdio: `julia_eval`, `julia_stop` and `julia_list_sessions`. Each environment gets its own `julia` child process, so state and compiled code are kept between calls.
 
-This is a Julia port of the Python server [aplavin/julia-mcp](https://github.com/aplavin/julia-mcp), with the same tools and behavior.
+It started as a Julia port of the Python server [aplavin/julia-mcp](https://github.com/aplavin/julia-mcp).
 
 Only macOS and Linux are supported, because the process and pipe handling uses POSIX file descriptors.
 
@@ -37,6 +37,7 @@ julia +1.13 --project=test -e 'import Pkg; Pkg.instantiate(); include("test/runt
 
 ## Differences from the Python server
 
+- `julia_restart` is replaced by `julia_stop`, which frees a session's resources; the next `julia_eval` starts a fresh one.
 - Sessions can be given a `name`, so several sessions can share one `env_path` (for example the same project under two Julia versions), and later calls can address a session by name alone.
 - Sessions idle for 72 hours are shut down.
 - Sessions are killed and temporary directories removed when the client closes stdin, including sessions that are still busy.
