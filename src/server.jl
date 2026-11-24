@@ -3,23 +3,47 @@ const SUPPORTED_PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 
 const JULIA_EVAL_DESCRIPTION = """
-ALWAYS use this tool to run Julia code. NEVER run julia via command line.
+Run Julia code in a persistent session. Prefer this over running `julia` from the shell: state and compiled code
+are kept between calls, so later calls are fast.
 
-Persistent REPL session with state preserved between calls.
-Each env_path gets its own session, started lazily.
-Do not type `Pkg.activate()` explicitly in your code; instead, specify the env_path argument to select the environment.
+Each environment gets its own session, started on first use. Select the environment with env_path instead of
+calling `Pkg.activate`. Sessions unused for 72 hours are stopped, so state may be gone after a long pause.
+
+Printed output is returned, followed by the value of the last expression as the REPL would show it. End the
+code with `;` to suppress the value.
+
+Revise is loaded when the session starts (if it is installed in the default environment) and runs before every
+call, so edits to packages loaded with `using` or `import` take effect without stopping the session. Files you
+`include` yourself are not tracked: include them again, or load them with `includet`. If Revise fails to load,
+the first result of the session starts with a note saying so; edits are then not picked up and the session must
+be stopped and started again after each change.
+
+For package development, pass the package's test/ directory as env_path: the session then activates the package
+with TestEnv, so the package and its test dependencies are both available. Pkg operations in such a session change
+a temporary environment, not test/Project.toml.
 
 Args:
-    code: Julia code to evaluate. Printed output is returned, followed by the value of the last expression
-        as the REPL would show it. End the code with `;` to suppress the value.
-    env_path: Julia project directory path. Omit for a temporary environment.
-    timeout: Seconds (default: 60). Auto-disabled for Pkg operations.
-    julia_cmd: Custom Julia command, should be used rarely, only when explicitly requested. Examples: "julia +1.11", "julia --check-bounds=yes", "/path/to/julia".
-    name: Short label for the session, to avoid repeating env_path and julia_cmd.
-        Pass it with env_path (and julia_cmd) once to name the session, then pass
-        name alone on later calls. A named session is never restarted implicitly,
-        so naming lets several sessions share one env_path, e.g. the same project
-        under two Julia versions."""
+    code: Julia code to evaluate.
+    env_path: Julia project directory. Omit for a temporary environment.
+    timeout: Seconds until the call is aborted, default 60. On timeout the session is killed and all its state is
+        lost, so for long work (test suites, precompilation of large packages) pass a generous value, or 0 for no
+        timeout. Calls containing `Pkg.` have no timeout unless one is passed.
+    julia_cmd: Custom Julia command, only when explicitly requested. Examples: "julia +1.11",
+        "julia --check-bounds=yes", "/path/to/julia".
+    name: Short label for the session. Only needed to run several sessions on one env_path at the same time,
+        typically to compare the same code under different Julia versions or builds (e.g. "julia +1.12.6" vs
+        "julia +1.12.7", or a release vs a local Julia build at "/path/to/julia" when working on Julia or a
+        stdlib), for benchmarks or differing outputs, or to keep a normal session next to one started with
+        diagnostic flags (e.g. "julia --trace-compile=stderr", "julia --track-allocation=user").
+        Pass it with env_path (and julia_cmd) once to
+        create the session, then name alone on later calls. Named sessions are never replaced implicitly, while an
+        unnamed call with a different julia_cmd replaces the unnamed session on that env_path.
+        Sessions on different Julia minor versions must not share a Manifest.toml, or each rewrites it for its own
+        version. Before starting the second version, copy the project's Manifest.toml to
+        Manifest-v<major>.<minor>.toml (e.g. Manifest-v1.11.toml) next to it, which that version then uses instead,
+        and run `import Pkg; Pkg.resolve()` first in the new session. That adapts stdlib and JLL entries to its Julia
+        version while keeping package versions, so both sessions run the same packages. For a test/ session the
+        manifest is the package's, so copy and resolve it in a session on the package directory."""
 
 const JULIA_STOP_DESCRIPTION = """
 Stop a Julia session, freeing its memory and losing all its state. The next julia_eval call for the same
