@@ -133,7 +133,12 @@ end
 
             @test eval_code("x = 21; println(2x)") == "42"
             @test eval_code("println(x + 1); println(stderr, \"err\")") == "22\nerr"
-            @test eval_code("y = 1") == "(no output)"
+            @test eval_code("y = 1") == "1"
+            @test eval_code("y + 1;") == "(no output)"
+            @test eval_code("y + 1 # comment;") == "2"
+            @test eval_code("println(\"printed\"); [y, 2y]") == "printed\n2-element Vector{Int64}:\n 1\n 2"
+            @test eval_code("struct Foo end; Base.show(io::IO, ::MIME\"text/plain\", ::Foo) = print(io, \"custom\"); Foo()") == "custom"
+            @test occursin("⋮", eval_code("collect(1:1000)"))
             @test eval_code("using Printf; @printf(\"%.2f\\n\", 1.234)") == "1.23"
             @test startswith(eval_code("error(\"boom\")"), "ERROR: LoadError: boom")
             @test eval_code("println(\"é😀\")") == "é😀"

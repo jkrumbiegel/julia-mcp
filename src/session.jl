@@ -116,7 +116,7 @@ function start!(s::JuliaSession)
     cmd = julia_command(s)
     s.cmd = cmd
     s.child = spawn_merged(cmd, s.env_dir)
-    execute_raw(s, "", STARTUP_TIMEOUT)
+    execute_raw(s, "import REPL", STARTUP_TIMEOUT)
     load_revise!(s)
 
     code = init_code(s)
@@ -151,7 +151,11 @@ end
 
 function wrap_user_code(code::String)
     hex = bytes2hex(codeunits(code))
-    return "try; Revise.revise(); catch; end;include_string(Main, String(hex2bytes(\"$hex\")));nothing"
+    return string(
+        "try; Revise.revise(); catch; end;",
+        "let code = String(hex2bytes(\"$hex\")), value = include_string(Main, code);",
+        "value === nothing || REPL.ends_with_semicolon(code) || ",
+        "(Base.invokelatest(show, IOContext(stdout, :limit => true), MIME\"text/plain\"(), value); println()); end;nothing")
 end
 
 function clock_time()

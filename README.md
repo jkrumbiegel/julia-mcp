@@ -38,6 +38,7 @@ julia +1.13 --project=test -e 'import Pkg; Pkg.instantiate(); include("test/runt
 ## Differences from the Python server
 
 - `julia_restart` is replaced by `julia_stop`, which frees a session's resources; the next `julia_eval` starts a fresh one.
+- The value of the last expression is shown like in the REPL, unless the code ends with `;`.
 - If Revise fails to load, the first result of the session says so, and `julia_list_sessions` marks the session.
 - Sessions can be given a `name`, so several sessions can share one `env_path` (for example the same project under two Julia versions), and later calls can address a session by name alone.
 - Sessions idle for 72 hours are shut down.

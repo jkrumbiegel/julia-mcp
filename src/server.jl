@@ -10,7 +10,8 @@ Each env_path gets its own session, started lazily.
 Do not type `Pkg.activate()` explicitly in your code; instead, specify the env_path argument to select the environment.
 
 Args:
-    code: Julia code to evaluate. Use display(...)/println(...) to see output.
+    code: Julia code to evaluate. Printed output is returned, followed by the value of the last expression
+        as the REPL would show it. End the code with `;` to suppress the value.
     env_path: Julia project directory path. Omit for a temporary environment.
     timeout: Seconds (default: 60). Auto-disabled for Pkg operations.
     julia_cmd: Custom Julia command, should be used rarely, only when explicitly requested. Examples: "julia +1.11", "julia --check-bounds=yes", "/path/to/julia".
